@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	pathTCPTab  = "/proc/net/tcp"
-	pathTCP6Tab = "/proc/net/tcp6"
-	pathUDPTab  = "/proc/net/udp"
-	pathUDP6Tab = "/proc/net/udp6"
+	pathTCPTab   = "/proc/net/tcp"
+	pathTCP6Tab  = "/proc/net/tcp6"
+	pathUDPTab   = "/proc/net/udp"
+	pathUDP6Tab  = "/proc/net/udp6"
+	pathRouteTab = "/proc/net/route"
 
 	ipv4StrLen = 8
 	ipv6StrLen = 32
@@ -42,6 +43,16 @@ const (
 	Closing             = 0x0b
 )
 
+// Route flags
+const (
+	Up        = 0x01 // Route usable
+	Gateway   = 0x02 // Desitnation is a gateway
+	Host      = 0x04 // Destination is a host
+	Reinstate = 0x08 // Reinstate route after timeout
+	Dynamic   = 0x10 // Created by redirect
+	Modified  = 0x20 // Modified by redirect
+)
+
 var skStates = [...]string{
 	"UNKNOWN",
 	"ESTABLISHED",
@@ -55,6 +66,16 @@ var skStates = [...]string{
 	"LAST_ACK",
 	"LISTEN",
 	"CLOSING",
+}
+
+var rtFlags = [...]string{
+	"",
+	"U",
+	"G",
+	"UG",
+	"H",
+	"D",
+	"M",
 }
 
 // Errors returned by gonetstat
@@ -91,9 +112,6 @@ func parseIPv6(s string) (net.IP, error) {
 
 func parseAddr(s string) (*SockAddr, error) {
 	fields := strings.Split(s, ":")
-	if len(fields) < 2 {
-		return nil, fmt.Errorf("netstat: not enough fields: %v", s)
-	}
 	var ip net.IP
 	var err error
 	switch len(fields[0]) {
@@ -107,11 +125,55 @@ func parseAddr(s string) (*SockAddr, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(fields) == 1{
+		return &SockAddr{IP: ip, Port: 0}, nil
+	}
 	v, err := strconv.ParseUint(fields[1], 16, 16)
 	if err != nil {
 		return nil, err
 	}
 	return &SockAddr{IP: ip, Port: uint16(v)}, nil
+}
+
+func parseRoutetab(r io.Reader) ([]RouteTabEntry, error) {
+	br := bufio.NewScanner(r)
+	tab := make([]RouteTabEntry, 0, 4)
+
+	// Discard title
+	br.Scan()
+
+	for br.Scan() {
+		var e RouteTabEntry
+		line := br.Text()
+		fields := strings.Fields(line)
+		if len(fields) < 11 {
+			return nil, fmt.Errorf("netstat: not enough fields: %v, %v", len(fields), fields)
+		}
+		e.Iface = fields[0]
+		addr, err := parseAddr(fields[1])
+		if err != nil {
+			return nil, err
+		}
+		e.Destination = addr
+		addr, err = parseAddr(fields[2])
+		if err != nil {
+			return nil, err
+		}
+		e.Gateway = addr
+		u, err := strconv.ParseUint(fields[3], 16, 8)
+		if err != nil {
+			return nil, err
+		}
+		e.Flags = RtFlag(u)
+		addr, err = parseAddr(fields[7])
+		if err != nil {
+			return nil, err
+		}
+		e.Mask = addr
+
+		tab = append(tab, e)
+	}
+	return tab, br.Err()
 }
 
 func parseSocktab(r io.Reader, accept AcceptFn) ([]SockTabEntry, error) {
@@ -257,7 +319,20 @@ func doNetstat(path string, fn AcceptFn) ([]SockTabEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	extractProcInfo(tabs)
+	return tabs, nil
+}
+
+// doNetstatRoutes - collect information about network routes
+func doNetstatRoutes(path string) ([]RouteTabEntry, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	tabs, err := parseRoutetab(f)
+	f.Close()
+	if err != nil {
+		return nil, err
+	}
 	return tabs, nil
 }
 
@@ -283,4 +358,9 @@ func osUDPSocks(accept AcceptFn) ([]SockTabEntry, error) {
 // elements that satisfy the accept function
 func osUDP6Socks(accept AcceptFn) ([]SockTabEntry, error) {
 	return doNetstat(pathUDP6Tab, accept)
+}
+
+// Routes returns the routing table
+func osRoutes() ([]RouteTabEntry, error) {
+	return doNetstatRoutes(pathRouteTab)
 }

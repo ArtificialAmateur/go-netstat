@@ -17,6 +17,7 @@ var (
 	resolve   = flag.Bool("res", false, "lookup symbolic names for host addresses")
 	ipv4      = flag.Bool("4", false, "display only IPv4 sockets")
 	ipv6      = flag.Bool("6", false, "display only IPv6 sockets")
+	routing   = flag.Bool("route", false, "display routing tables")
 	help      = flag.Bool("help", false, "display this help screen")
 )
 
@@ -44,54 +45,64 @@ func main() {
 		proto = protoIPv4 | protoIPv6
 	}
 
-	if os.Geteuid() != 0 {
-		fmt.Println("Not all processes could be identified, you would have to be root to see it all.")
-	}
-	fmt.Printf("Proto %-23s %-23s %-12s %-16s\n", "Local Addr", "Foreign Addr", "State", "PID/Program name")
+	if *routing {
+		fmt.Printf("%-16s %-16s %-16s %-16s %-16s\n", "Iface", "Destination", "Gateway", "Mask", "Flags")
 
-	if *udp {
-		if proto&protoIPv4 == protoIPv4 {
-			tabs, err := netstat.UDPSocks(netstat.NoopFilter)
-			if err == nil {
-				displaySockInfo("udp", tabs)
-			}
-		}
-		if proto&protoIPv6 == protoIPv6 {
-			tabs, err := netstat.UDP6Socks(netstat.NoopFilter)
-			if err == nil {
-				displaySockInfo("udp6", tabs)
-			}
+		tabs, err := netstat.Routes()
+		if err == nil {
+			displayRouteInfo(tabs)
 		}
 	} else {
-		*tcp = true
-	}
 
-	if *tcp {
-		var fn netstat.AcceptFn
+		if os.Geteuid() != 0 {
+			fmt.Println("Not all processes could be identified, you would have to be root to see it all.")
+		}
+		fmt.Printf("Proto %-23s %-23s %-12s %-16s\n", "Local Addr", "Foreign Addr", "State", "PID/Program name")
 
-		switch {
-		case *all:
-			fn = func(*netstat.SockTabEntry) bool { return true }
-		case *listening:
-			fn = func(s *netstat.SockTabEntry) bool {
-				return s.State == netstat.Listen
+		if *udp {
+			if proto&protoIPv4 == protoIPv4 {
+				tabs, err := netstat.UDPSocks(netstat.NoopFilter)
+				if err == nil {
+					displaySockInfo("udp", tabs)
+				}
 			}
-		default:
-			fn = func(s *netstat.SockTabEntry) bool {
-				return s.State != netstat.Listen
+			if proto&protoIPv6 == protoIPv6 {
+				tabs, err := netstat.UDP6Socks(netstat.NoopFilter)
+				if err == nil {
+					displaySockInfo("udp6", tabs)
+				}
 			}
+		} else {
+			*tcp = true
 		}
 
-		if proto&protoIPv4 == protoIPv4 {
-			tabs, err := netstat.TCPSocks(fn)
-			if err == nil {
-				displaySockInfo("tcp", tabs)
+		if *tcp {
+			var fn netstat.AcceptFn
+
+			switch {
+			case *all:
+				fn = func(*netstat.SockTabEntry) bool { return true }
+			case *listening:
+				fn = func(s *netstat.SockTabEntry) bool {
+					return s.State == netstat.Listen
+				}
+			default:
+				fn = func(s *netstat.SockTabEntry) bool {
+					return s.State != netstat.Listen
+				}
 			}
-		}
-		if proto&protoIPv6 == protoIPv6 {
-			tabs, err := netstat.TCP6Socks(fn)
-			if err == nil {
-				displaySockInfo("tcp6", tabs)
+
+			if proto&protoIPv4 == protoIPv4 {
+				tabs, err := netstat.TCPSocks(fn)
+				if err == nil {
+					displaySockInfo("tcp", tabs)
+				}
+			}
+			if proto&protoIPv6 == protoIPv6 {
+				tabs, err := netstat.TCP6Socks(fn)
+				if err == nil {
+					displaySockInfo("tcp6", tabs)
+				}
 			}
 		}
 	}
@@ -121,5 +132,29 @@ func displaySockInfo(proto string, s []netstat.SockTabEntry) {
 		saddr := lookup(e.LocalAddr)
 		daddr := lookup(e.RemoteAddr)
 		fmt.Printf("%-5s %-23.23s %-23.23s %-12s %-16s\n", proto, saddr, daddr, e.State, p)
+	}
+}
+
+func displayRouteInfo(r []netstat.RouteTabEntry) {
+	lookup := func(skaddr *netstat.SockAddr) string {
+		const IPv4Strlen = 17
+		addr := skaddr.IP.String()
+		if *resolve {
+			names, err := net.LookupAddr(addr)
+			if err == nil && len(names) > 0 {
+				addr = names[0]
+			}
+		}
+		if len(addr) > IPv4Strlen {
+			addr = addr[:IPv4Strlen]
+		}
+		return fmt.Sprintf("%s", addr)
+	}
+
+	for _, e := range r {
+		daddr := lookup(e.Destination)
+		gaddr := lookup(e.Gateway)
+		mask := lookup(e.Mask)
+		fmt.Printf("%-16s %-16s %-16s %-16s %-16s\n", e.Iface, daddr, gaddr, mask, e.Flags)
 	}
 }
