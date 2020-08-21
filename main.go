@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 
 	"github.com/cakturk/go-netstat/netstat"
 )
@@ -46,8 +47,6 @@ func main() {
 	}
 
 	if *routing {
-		fmt.Printf("%-16s %-16s %-16s %-16s %-16s\n", "Iface", "Destination", "Gateway", "Mask", "Flags")
-
 		tabs, err := netstat.Routes()
 		if err == nil {
 			displayRouteInfo(tabs)
@@ -152,9 +151,16 @@ func displayRouteInfo(r []netstat.RouteTabEntry) {
 	}
 
 	for _, e := range r {
-		daddr := lookup(e.Destination)
-		gaddr := lookup(e.Gateway)
-		mask := lookup(e.Mask)
-		fmt.Printf("%-16s %-16s %-16s %-16s %-16s\n", e.Iface, daddr, gaddr, mask, e.Flags)
+		if runtime.GOOS == "windows" {
+			fmt.Printf("%-16s %-16s %-16s %-16s %-16s\n", "Iface", "Destination", "Gateway", "Mask", "Metrics")
+			fmt.Printf("%-16s %-16s %-16s %-16s %-16v\n", e.Iface, e.Destination, "On-link", e.Mask, e.Metric)
+		} else {
+			fmt.Printf("%-16s %-16s %-16s %-16s %-16s\n", "Iface", "Destination", "Gateway", "Mask", "Flags")
+			daddr := lookup(e.Destination)
+			gaddr := lookup(e.Gateway)
+			mask := lookup(e.Mask)
+			fmt.Printf("%-16s %-16s %-16s %-16s %-16s\n", e.Iface, daddr, gaddr, mask, e.Flags)
+		}
+
 	}
 }

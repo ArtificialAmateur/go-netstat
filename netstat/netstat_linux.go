@@ -83,6 +83,22 @@ var (
 	ErrNotEnoughFields = errors.New("gonetstat: not enough fields in the line")
 )
 
+// RouteTabEntry type represents each line of the /proc/net/route
+type RouteTabEntry struct {
+	Iface       string
+	Destination *SockAddr
+	Gateway     *SockAddr
+	Mask        *SockAddr
+	Flags       RtFlag
+}
+
+// RtFlags type represents the route flags
+type RtFlag uint8
+
+func (f RtFlag) String() string {
+	return rtFlags[f]
+}
+
 func parseIPv4(s string) (net.IP, error) {
 	v, err := strconv.ParseUint(s, 16, 32)
 	if err != nil {

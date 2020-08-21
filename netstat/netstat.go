@@ -25,15 +25,6 @@ type SockTabEntry struct {
 	Process    *Process
 }
 
-// RouteTabEntry type represents each line of the /proc/net/route
-type RouteTabEntry struct {
-	Iface       string
-	Destination *SockAddr
-	Gateway     *SockAddr
-	Mask        *SockAddr
-	Flags       RtFlag
-}
-
 // Process holds the PID and process name to which each socket belongs
 type Process struct {
 	Pid  int
@@ -49,13 +40,6 @@ type SkState uint8
 
 func (s SkState) String() string {
 	return skStates[s]
-}
-
-// RtFlags type represents the route flags
-type RtFlag uint8
-
-func (f RtFlag) String() string {
-	return rtFlags[f]
 }
 
 // AcceptFn is used to filter socket entries. The value returned indicates

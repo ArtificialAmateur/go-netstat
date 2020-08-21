@@ -33,6 +33,7 @@ var (
 	procCreateSnapshot      = modkernel32.NewProc("CreateToolhelp32Snapshot")
 	procProcess32First      = modkernel32.NewProc("Process32First")
 	procProcess32Next       = modkernel32.NewProc("Process32Next")
+	procGetIpForwardTable  = modiphlpapi.NewProc("GetIpForwardTable")
 )
 
 // Socket states
@@ -185,6 +186,86 @@ type MibUDPRowOwnerPID struct {
 	WinPid
 }
 
+type MibIpForwardRow struct {
+	dwForwardDest      uint32
+	dwForwardMask      uint32
+	dwForwardPolicy    uint32
+	dwForwardNextHop   uint32
+	dwForwardIfIndex   uint32
+	dwForwardType      uint32
+	dwForwardProto     uint32
+	dwForwardAge       uint32
+	dwForwardNextHopAS uint32
+	dwForwardMetric1   uint32
+	dwForwardMetric2   uint32
+	dwForwardMetric3   uint32
+	dwForwardMetric4   uint32
+	dwForwardMetric5   uint32
+}
+
+type MibIpForwardTable struct {
+	dwNumEntries uint32
+	Table [1]MibIpForwardRow
+}
+
+func (t *MibIpForwardTable) Rows() []MibIpForwardRow {
+	var s []MibIpForwardRow
+	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&s))
+	hdr.Data = uintptr(unsafe.Pointer(&t.Table[0]))
+	hdr.Len = int(t.dwNumEntries)
+	hdr.Cap = int(t.dwNumEntries)
+	return s
+}
+
+func rawGetRoutingTable(proc uintptr, tab unsafe.Pointer, size *uint32, order bool) error {
+	var oint uintptr
+	if order {
+		oint = 1
+	}
+	r1, _, callErr := syscall.Syscall(
+		proc,
+		uintptr(3),
+		uintptr(tab),
+		uintptr(unsafe.Pointer(size)),
+		oint)
+	if callErr != 0 {
+		return callErr
+	}
+	if r1 != 0 {
+		return syscall.Errno(r1)
+	}
+	return nil
+}
+
+func getRoutingTable(proc uintptr) ([]byte, error) {
+	var (
+		size uint32
+		buf []byte
+	)
+
+	// determine size
+	err := rawGetRoutingTable(proc, unsafe.Pointer(nil), &size, false)
+	if err != nil && err != errInsuffBuff {
+		return nil, err
+	}
+	buf = make([]byte, size)
+	table := unsafe.Pointer(&buf[0])
+	err = rawGetRoutingTable(proc, table, &size, true)
+	if err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+// GetRoutingTable function retrieves the IPv4 routing table
+func GetRoutingTable() (*MibIpForwardTable, error) {
+	b, err := getRoutingTable(procGetIpForwardTable.Addr())
+	if err != nil {
+		return nil, err
+	}
+	return (*MibIpForwardTable)(unsafe.Pointer(&b[0])), nil
+}
+
 func (m *MibUDPRowOwnerPID) LocalSock() *SockAddr  { return m.Sock() }
 func (m *MibUDPRowOwnerPID) RemoteSock() *SockAddr { return &SockAddr{net.IPv4zero, 0} }
 func (m *MibUDPRowOwnerPID) SockState() SkState    { return Close }
@@ -195,6 +276,7 @@ func (m *MibUDPRowOwnerPID) SockState() SkState    { return Close }
 // endpoint.
 type MibUDPTableOwnerPID struct {
 	NumEntries uint32
+
 	Table      [1]MibUDPRowOwnerPID
 }
 
@@ -562,4 +644,39 @@ func osUDP6Socks(accept AcceptFn) ([]SockTabEntry, error) {
 	}
 	snp.Close()
 	return sktab, nil
+}
+
+func parseIPv4(ipnr uint32) (string) {
+	ip := net.IPv4(0,0,0,0)
+	end := binary.LittleEndian
+	end.PutUint32([]byte(ip.To4()),ipnr)
+	return ip.String()
+}
+
+func osRoutes() ([]RouteTabEntry, error) {
+	tbl, err := GetRoutingTable()
+	if err != nil {
+		return nil, err
+	}
+	tab := make([]RouteTabEntry, 0, 4)
+
+	r := tbl.Rows()
+	for i := range r {
+		var e RouteTabEntry
+		e.Destination = parseIPv4(r[i].dwForwardDest)
+		e.Mask = parseIPv4(r[i].dwForwardMask)
+		e.Iface = parseIPv4(r[i].dwForwardNextHop)
+		e.Metric = r[i].dwForwardMetric1
+		tab = append(tab, e)
+	}
+	return tab, err
+}
+
+// RouteTabEntry type represents each line of the /proc/net/route
+type RouteTabEntry struct {
+	Iface       string
+	Destination string
+	Gateway     string
+	Mask        string
+	Metric		uint32
 }
